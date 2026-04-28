@@ -1,20 +1,49 @@
 # cloudfront-aes-gcm-token
 
-Stateless AES-GCM signed asset tokens for CloudFront. Zero runtime dependencies. AES-256-GCM with first-class key rotation and a tamper-evident wire format.
+Small Node library for opaque, stateless AES-GCM asset tokens — designed to ride in URL path segments behind a CDN, verified by Lambda@Edge or an origin service. Zero runtime dependencies, first-class key rotation, tamper-evident wire format.
 
 [![ci](https://github.com/Shubham-bimstream/cloudfront-aes-gcm-token/actions/workflows/ci.yml/badge.svg)](https://github.com/Shubham-bimstream/cloudfront-aes-gcm-token/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## Why this exists
+> **Status: 0.1.x — experimental.** This is a security-sensitive utility. The underlying primitive (AES-256-GCM via Node's built-in `crypto`) is rock solid; the *packaging* in this library has not been independently reviewed. Audit the code, threat-model your use case, and treat this as a *starting point*, not a turnkey production crypto layer.
 
-CloudFront's built-in URL signing has two practical problems for SPAs that authenticate users with cookies:
+## What this is — and isn't
 
-1. **Cookie-vs-URL mismatch.** CloudFront cookie signing requires one cookie set per session and breaks across subdomain boundaries. URL signing avoids cookies but the canonical query-string form leaks the resource path and a verbatim signature.
-2. **Symmetric without authenticated encryption.** Rolling your own HMAC token is one wrong constant-time check away from a forgery vector. AES-GCM gives you both confidentiality and authenticity in a primitive that's been deployed for two decades.
+This is **one** valid pattern for protecting CDN-fronted assets, alongside several others. Most teams should reach for the standard tools first:
 
-This library encodes a JSON payload as a stateless **AES-GCM-encrypted** token, base64url-safe, with key version baked into the format so you can rotate. The token is opaque on the wire, tamper-evident, and contains everything the verifier needs to authorize the request — no DB lookup.
+| Pattern | Resource path confidentiality | Verifier | Key rotation | When to use |
+|---|---|---|---|---|
+| **CloudFront signed URL** | ❌ visible in query string | CloudFront edge | Manual key-pair swap | The default. Time-boxed single-asset delivery. |
+| **CloudFront signed cookie** | ❌ visible in cookie scope | CloudFront edge | Manual key-pair swap | Authenticated-session asset access on a single domain. |
+| **JWT in `Authorization` header** | ❌ claims base64-decodable | App / API gateway | Standard | API auth. Not designed to live in a URL path. |
+| **HMAC token in URL** | ❌ no encryption | Origin compares MAC | Manual | When you don't need payload confidentiality. Watch for non-constant-time-compare bugs. |
+| **This library** | ✅ encrypted | Lambda@Edge / origin decrypts | Built into wire format | Narrow case below. |
 
-The pattern is common in multi-tenant asset-delivery setups behind a CDN, where a JWT in the `Authorization` header isn't an option (raw CDN byte-serves) and signed query strings leak too much information.
+This library is for the narrower case where **all** of the following hold:
+
+1. The resource path or token payload itself is sensitive — e.g. multi-tenant SaaS where `documents/<tenant>/<asset>` shouldn't appear verbatim in a signed query string.
+2. You want user / tenant / scope encoded in the token and recoverable by the verifier without a DB hop.
+3. You're fronting bytes with CloudFront and run a verifier in **Lambda@Edge** or at the origin (CloudFront Functions don't have the crypto APIs needed for AES-GCM — this won't run there).
+4. You want first-class key rotation as part of the wire format.
+
+If your case is "I want to give one user a temporary download link," use a CloudFront signed URL. Don't reach for this.
+
+## When to use
+
+- ✅ Multi-tenant asset delivery where the resource path leaks tenant boundaries.
+- ✅ CDN-fronted byte serves where a JWT in the `Authorization` header isn't an option.
+- ✅ You need user / tenant / scope encoded in the token, verifier-decryptable, no DB hop.
+- ✅ You want a tamper-evident bearer token with built-in key rotation.
+- ✅ You have a Lambda@Edge or origin verifier in your auth path.
+
+## When NOT to use
+
+- ❌ Your use case fits CloudFront signed URLs or cookies — use those.
+- ❌ You need general API authentication — OAuth + JWT is the right shape.
+- ❌ Your verifier needs to run in **CloudFront Functions** — no AES-GCM API there. Use Lambda@Edge instead, or pick a different design.
+- ❌ You need audited, compliance-grade crypto infrastructure — this is 0.x experimental code, not a substitute for a reviewed security library.
+- ❌ One-time single-user file delivery — a signed URL is simpler and doesn't need a verifier service.
+- ❌ You're using this for *authentication* rather than *authorization to fetch a specific asset* — bearer tokens that live in URLs are fundamentally weaker than tokens in headers.
 
 ## Install
 
@@ -151,15 +180,17 @@ type VerifyResult =
 
 - Tampering with the token (any single-bit flip → `tampered`).
 - Forging a token without the key.
-- Reading the payload without the key (resource paths and IDs are opaque).
+- Reading the payload without the key (resource paths and IDs are opaque on the wire).
 - Replaying a token with a swapped version byte to point at a different key (rejected via AAD).
 
 **What this library does NOT protect against**
 
 - **Replay before expiry.** A token is bearer-grade. Anyone who captures it before `expiresAt` can use it. Mitigations: short TTLs (default 24h, recommend ≤1h for sensitive assets); deliver tokens over TLS only; bind tokens to client IP / user-agent at the verifier if needed (out of scope here).
 - **Clock skew between signer and verifier.** Both sides trust their own `Date.now()`. Run NTP.
-- **Compromised keys.** If a key leaks, every token signed under that version is forgeable. Rotate by adding a new version and dropping the old one once outstanding tokens expire.
-- **Quantum.** AES-256 is post-quantum-acceptable for data confidentiality (Grover ⇒ ~128-bit effective security), but if your threat model includes "harvest-now-decrypt-later" against signed asset URLs, this library isn't the right tool. (For most asset-signing use cases — TTLs of hours — it's fine.)
+- **Compromised keys.** If a key leaks, every token signed under that version is forgeable. Rotate by adding a new version and dropping the old once outstanding tokens expire.
+- **Quantum.** AES-256 is post-quantum-acceptable for data confidentiality (Grover ⇒ ~128-bit effective security), but if your threat model includes "harvest-now-decrypt-later" against signed asset URLs, this library isn't the right tool.
+- **Side channels.** Node's GCM implementation handles the cipher's constant-time concerns, but nothing here defends against timing analysis at the verifier layer beyond what the cipher provides.
+- **Use as session auth.** Tokens encode authorization to fetch a specific resource for a window of time. They are not a session, not a refresh token, and not a substitute for proper authentication.
 
 ## Operational notes
 
@@ -167,7 +198,6 @@ type VerifyResult =
 - Keep the signer and the verifier in sync via Secrets Manager rotation; the version byte makes the rotation safe.
 - For Lambda@Edge verifiers, cache the `TokenSigner` instance across invocations to avoid re-parsing keys on every request.
 - Token length scales with payload size. A typical payload (resource path + 4 hashed IDs + type + scope) lands around 230 base64url characters — well within URL-length limits.
-- `verify()` is constant-time with respect to the key (Node's GCM implementation handles this); the `malformed` and `unknown_key` paths are not constant-time, but they're driven by attacker-controlled bytes that don't reveal anything sensitive.
 
 ## Examples
 
@@ -187,6 +217,10 @@ npm test
 ```
 
 The test suite covers happy-path roundtrip, every `VerifyFailReason`, single-bit tampering on every wire-format field, AAD-bound version-byte swaps, key rotation across signer instances, expiry boundary conditions, and constructor argument validation.
+
+## Contributing
+
+This is a small library and the surface area is intentional. Issues and PRs welcome for: documentation clarity, additional examples (Lambda@Edge skeleton, Cloudflare Workers via Web Crypto), security-relevant test cases, and platform support beyond Node 18+. **Please don't open PRs that broaden the cipher choices, change the wire format, or add features outside the "opaque asset token" use case** — there are better libraries for those.
 
 ## License
 
