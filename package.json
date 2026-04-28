@@ -1,0 +1,55 @@
+{
+  "name": "cloudfront-aes-gcm-token",
+  "version": "0.1.0",
+  "description": "Stateless AES-GCM signed asset tokens for CloudFront. Zero runtime dependencies. Key rotation, tamper-evident wire format.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "type-check": "tsc -p tsconfig.json --noEmit",
+    "example:basic": "tsx examples/basic.ts",
+    "example:express": "tsx examples/express.ts"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "cloudfront",
+    "aws",
+    "aes-gcm",
+    "signed-url",
+    "signed-token",
+    "asset-signing",
+    "stateless-auth"
+  ],
+  "author": "Shubham Pandey <shubham.rics@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Shubham-bimstream/cloudfront-aes-gcm-token.git"
+  },
+  "homepage": "https://github.com/Shubham-bimstream/cloudfront-aes-gcm-token#readme",
+  "bugs": "https://github.com/Shubham-bimstream/cloudfront-aes-gcm-token/issues",
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.11.30",
+    "express": "^4.19.2",
+    "tsx": "^4.19.3",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  }
+}
